@@ -24,3 +24,12 @@ touch ~/.bashrc
 //Then install the autocomplete package.
 
 terraform -install-autocomplete
+
+//init
+terraform fmt && terraform init
+
+//validate
+terraform validate
+
+//plan and apply
+terraform plan -var-file="var.tfvars" && terraform plan -var-file="var.tfvars"
