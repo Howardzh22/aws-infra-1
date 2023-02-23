@@ -157,6 +157,7 @@ resource "aws_instance" "webapp" {
   subnet_id                   = aws_subnet.public_subnets[0].id
   associate_public_ip_address = true
   key_name                    = data.aws_key_pair.ec2_key.key_name
+  disable_api_termination = false
   root_block_device {
     volume_size = 50
     volume_type = "gp2"
