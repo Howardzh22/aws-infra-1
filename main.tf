@@ -80,11 +80,9 @@ resource "aws_security_group" "database" {
   description = "allow on port 3306, and restrict access to the instance from the internet"
   vpc_id      = aws_vpc.main.id
   ingress {
-    from_port        = 3306
-    to_port          = 3306
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
     security_groups = [aws_security_group.application.id]
   }
 
@@ -200,8 +198,8 @@ resource "aws_iam_policy" "mys3policy" {
         ],
         "Effect" : "Allow",
         "Resource" : [
-          "arn:aws:s3:::s3_bucket",
-          "arn:aws:s3:::s3_bucket/*"
+          "arn:aws:s3:::${module.s3_bucket.mybucket.id}",
+          "arn:aws:s3:::${module.s3_bucket.mybucket.id}/*"
         ]
       }
     ]
@@ -299,8 +297,8 @@ resource "aws_instance" "webapp" {
     echo "DATABASE_USERNAME=${aws_db_instance.RDS.username}" >> /home/ec2-user/.env 
     echo "DATABASE_PASSWORD=${aws_db_instance.RDS.password}" >> /home/ec2-user/.env 
     echo "DIALECT=${aws_db_instance.RDS.engine}" >> /home/ec2-user/.env 
-    echo "AWS_BUCKET_NAME=${module.s3_bucket.mybucket.bucket}" >> /home/ec2-user/.env 
-    echo "AWS_BUCKET_REGION=${var.region}" >> /home/ec2-user/.env
+    echo "BUCKET_NAME=${module.s3_bucket.mybucket.bucket}" >> /home/ec2-user/.env 
+    echo "BUCKET_REGION=${var.region}" >> /home/ec2-user/.env
     mv /home/ec2-user/.env /home/ec2-user/webapp/.env 
     EOF
 }
