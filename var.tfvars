@@ -13,3 +13,7 @@ acl_value = "private"
 application_SG = "application"
 
 database_SG = "database"
+
+zone_name = "dev.howardzh.me"
+
+zone_id = "Z0051806DKID8JITBUMX"
