@@ -272,6 +272,14 @@ resource "aws_db_parameter_group" "RDSparameter" {
   }
 }
 
+resource "aws_route53_record" "myrecord" {
+  zone_id = var.zone_id
+  name    = var.zone_name
+  type    = "A"
+  ttl     = 60
+  records = [aws_instance.webapp.public_ip]
+}
+
 resource "aws_instance" "webapp" {
   instance_type               = "t2.micro"
   ami                         = data.aws_ami.app_ami.id

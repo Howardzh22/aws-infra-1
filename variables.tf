@@ -32,3 +32,11 @@ variable "application_SG" {
 variable "database_SG" {
   type = string
 }
+
+variable "zone_name" {
+  type = string
+}
+
+variable "zone_id" {
+  type = string
+}
