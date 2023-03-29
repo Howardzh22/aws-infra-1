@@ -171,13 +171,16 @@ resource "aws_route_table_association" "private_subnet_asso" {
 data "aws_ami" "app_ami" {
   most_recent = true
   name_regex  = "csye6225-*"
-  owners      = ["self"]
+  owners      = ["539751877006"]
 }
 
 data "aws_key_pair" "ec2_key" {
   key_pair_id = var.key_pair_id
 }
 
+data "aws_route53_zone" "demo_zone" {
+  name = var.zone_name
+}
 resource "aws_iam_policy" "mys3policy" {
   name        = "WebAppS3"
   description = "allow EC2 instances to perform S3 buckets"
@@ -232,6 +235,16 @@ resource "aws_iam_instance_profile" "attach-profile" {
   role = aws_iam_role.ec2_role.name
 }
 
+resource "aws_iam_role_policy_attachment" "run-cloudWatch-policy-attach" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "write-cloudWatch-policy-attach" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentAdminPolicy"
+}
+
 
 resource "aws_db_instance" "RDS" {
   allocated_storage      = 50
@@ -273,7 +286,7 @@ resource "aws_db_parameter_group" "RDSparameter" {
 }
 
 resource "aws_route53_record" "myrecord" {
-  zone_id = var.zone_id
+  zone_id = data.aws_route53_zone.demo_zone.zone_id
   name    = var.zone_name
   type    = "A"
   ttl     = 60
@@ -308,5 +321,11 @@ resource "aws_instance" "webapp" {
     echo "BUCKET_NAME=${module.s3_bucket.mybucket.bucket}" >> /home/ec2-user/.env 
     echo "BUCKET_REGION=${var.region}" >> /home/ec2-user/.env
     mv /home/ec2-user/.env /home/ec2-user/webapp/.env 
+    mv /tmp/cloudwatch-config.json /opt/cloudwatch-config.json
+    sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+    -a fetch-config \
+    -m ec2 \
+    -c file:/opt/cloudwatch-config.json \
+    -s
     EOF
 }
