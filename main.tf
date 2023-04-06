@@ -29,53 +29,33 @@ resource "aws_vpc" "main" {
 
 }
 
-resource "aws_security_group" "application" {
+resource "aws_security_group" "app_sg" {
   name        = "application"
   description = "allow on port 22,80,443,8080"
   vpc_id      = aws_vpc.main.id
   ingress {
-    from_port        = 22
-    to_port          = 22
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    from_port       = 22
+    to_port         = 22
+    protocol        = "tcp"
+    security_groups = [aws_security_group.lb_sg.id]
   }
-
   ingress {
-    from_port        = 80
-    to_port          = 80
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  ingress {
-    from_port        = 443
-    to_port          = 443
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  ingress {
-    from_port        = 8080
-    to_port          = 8080
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    from_port       = 8080
+    to_port         = 8080
+    protocol        = "tcp"
+    security_groups = [aws_security_group.lb_sg.id]
   }
 
   egress {
-    from_port        = 0
-    to_port          = 0
-    protocol         = "-1"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
 }
 
-resource "aws_security_group" "database" {
+resource "aws_security_group" "db_sg" {
   name        = "database"
   description = "allow on port 3306, and restrict access to the instance from the internet"
   vpc_id      = aws_vpc.main.id
@@ -83,27 +63,186 @@ resource "aws_security_group" "database" {
     from_port       = 3306
     to_port         = 3306
     protocol        = "tcp"
-    security_groups = [aws_security_group.application.id]
+    security_groups = [aws_security_group.app_sg.id]
   }
 
   egress {
-    from_port        = 0
-    to_port          = 0
-    protocol         = "-1"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
+resource "aws_security_group" "lb_sg" {
+  name        = "load balancer"
+  description = "allow TCP traffic on ports 80, and 443 from anywhere in the world"
+  vpc_id      = aws_vpc.main.id
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+data "template_file" "user_data" {
+
+  template = <<EOF
+
+  #!/bin/bash
+  echo "DATABASE_HOST=${replace(aws_db_instance.RDS.endpoint, "/:.*/", "")}" >> /home/ec2-user/.env 
+  echo "DATABASE_NAME=${aws_db_instance.RDS.db_name}" >> /home/ec2-user/.env 
+  echo "DATABASE_USERNAME=${aws_db_instance.RDS.username}" >> /home/ec2-user/.env 
+  echo "DATABASE_PASSWORD=${aws_db_instance.RDS.password}" >> /home/ec2-user/.env 
+  echo "DIALECT=${aws_db_instance.RDS.engine}" >> /home/ec2-user/.env 
+  echo "BUCKET_NAME=${module.s3_bucket.mybucket.bucket}" >> /home/ec2-user/.env 
+  echo "BUCKET_REGION=${var.region}" >> /home/ec2-user/.env
+  mv /home/ec2-user/.env /home/ec2-user/webapp/.env 
+  mv /tmp/cloudwatch-config.json /opt/cloudwatch-config.json
+  sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config \
+  -m ec2 \
+  -c file:/opt/cloudwatch-config.json \
+  -s
+
+  EOF
+
+}
+resource "aws_launch_template" "launch_conf" {
+  name          = "asg_launch_config"
+  image_id      = data.aws_ami.app_ami.id
+  instance_type = "t2.micro"
+  key_name      = data.aws_key_pair.ec2_key.key_name
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.app_sg.id]
+    //subnet_id                   = aws_subnet.public_subnets[0].id
+  }
+  user_data = base64encode(data.template_file.user_data.rendered)
+  iam_instance_profile {
+    name = aws_iam_instance_profile.attach-profile.name
+  }
+}
+resource "aws_autoscaling_group" "asg_group" {
+  name_prefix         = "asg_group"
+  vpc_zone_identifier = aws_subnet.public_subnets[*].id
+  default_cooldown    = 60
+  min_size            = 1
+  max_size            = 3
+  desired_capacity    = 1
+  target_group_arns   = [aws_lb_target_group.lb_tg.arn]
+  launch_template {
+    id      = aws_launch_template.launch_conf.id
+    version = "$Latest"
+  }
+  tag {
+    key                 = "Name"
+    value               = "asg_group"
+    propagate_at_launch = true
+  }
+}
+
+resource "aws_autoscaling_policy" "scale_up_policy" {
+  name                   = "scale_up_policy"
+  autoscaling_group_name = aws_autoscaling_group.asg_group.name
+  adjustment_type        = "ChangeInCapacity"
+  scaling_adjustment     = 1
+}
+
+resource "aws_cloudwatch_metric_alarm" "scale_up_alarm" {
+  alarm_name          = "scale_up_alarm"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  namespace           = "AWS/EC2"
+  metric_name         = "CPUUtilization"
+  statistic           = "Average"
+  threshold           = 5
+  period              = 60
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.asg_group.name
+  }
+  alarm_actions = [aws_autoscaling_policy.scale_up_policy.arn]
+}
+
+resource "aws_autoscaling_policy" "scale_down_policy" {
+  name                   = "scale_down_policy"
+  autoscaling_group_name = aws_autoscaling_group.asg_group.name
+  adjustment_type        = "ChangeInCapacity"
+  scaling_adjustment     = -1
+}
+
+resource "aws_cloudwatch_metric_alarm" "scale_down_alarm" {
+  alarm_name          = "scale_down_alarm"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 2
+  namespace           = "AWS/EC2"
+  metric_name         = "CPUUtilization"
+  statistic           = "Average"
+  threshold           = 3
+  period              = 60
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.asg_group.name
+  }
+  alarm_actions = [aws_autoscaling_policy.scale_down_policy.arn]
+}
+
+
+resource "aws_lb" "load_balancer" {
+  name               = "csye6225-lb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.lb_sg.id]
+  subnets            = aws_subnet.public_subnets.*.id
+  tags = {
+    Application = "WebApp"
+  }
+}
+
+resource "aws_lb_target_group" "lb_tg" {
+  name        = "lb-tg"
+  target_type = "instance"
+  port        = 8080
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+
+  health_check {
+    port     = 8080
+    path     = "/healthz"
+    protocol = "HTTP"
+  }
+
+}
+
+resource "aws_lb_listener" "lb_lis" {
+  load_balancer_arn = aws_lb.load_balancer.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.lb_tg.arn
+  }
+}
 
 resource "aws_subnet" "public_subnets" {
-  //count             = length(var.public_subnet_cidrs)
-  count  = 3
-  vpc_id = aws_vpc.main.id
-  //cidr_block        = element(var.public_subnet_cidrs, count.index)
-  cidr_block = cidrsubnet(var.cidr, 8, count.index)
-  //availability_zone = element(var.azs, count.index)
-
+  count             = 3
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(var.cidr, 8, count.index)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
     Name = "Public Subnet ${count.index + 1}"
@@ -111,12 +250,9 @@ resource "aws_subnet" "public_subnets" {
 }
 
 resource "aws_subnet" "private_subnets" {
-  //count             = length(var.private_subnet_cidrs)
-  count  = 3
-  vpc_id = aws_vpc.main.id
-  //cidr_block        = element(var.private_subnet_cidrs, count.index)
-  cidr_block = cidrsubnet(var.cidr, 8, count.index + 4)
-  //availability_zone = element(var.azs, count.index)
+  count             = 3
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(var.cidr, 8, count.index + 4)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
     Name = "Private Subnet ${count.index + 1}"
@@ -155,14 +291,12 @@ resource "aws_route_table" "private" {
 }
 
 resource "aws_route_table_association" "public_subnet_asso" {
-  //count = length(var.public_subnet_cidrs)
   count          = 3
   subnet_id      = element(aws_subnet.public_subnets[*].id, count.index)
   route_table_id = aws_route_table.public.id
 }
 
 resource "aws_route_table_association" "private_subnet_asso" {
-  //count = length(var.private_subnet_cidrs)
   count          = 3
   subnet_id      = element(aws_subnet.private_subnets[*].id, count.index)
   route_table_id = aws_route_table.private.id
@@ -234,15 +368,9 @@ resource "aws_iam_instance_profile" "attach-profile" {
   name = "attach_profile"
   role = aws_iam_role.ec2_role.name
 }
-
 resource "aws_iam_role_policy_attachment" "run-cloudWatch-policy-attach" {
   role       = aws_iam_role.ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
-}
-
-resource "aws_iam_role_policy_attachment" "write-cloudWatch-policy-attach" {
-  role       = aws_iam_role.ec2_role.name
-  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentAdminPolicy"
 }
 
 
@@ -259,7 +387,7 @@ resource "aws_db_instance" "RDS" {
   publicly_accessible    = false
   multi_az               = false
   db_subnet_group_name   = aws_db_subnet_group.db_subnet.name
-  vpc_security_group_ids = [aws_security_group.database.id]
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
   parameter_group_name   = aws_db_parameter_group.RDSparameter.name
   apply_immediately      = true
   skip_final_snapshot    = true
@@ -289,10 +417,14 @@ resource "aws_route53_record" "myrecord" {
   zone_id = data.aws_route53_zone.demo_zone.zone_id
   name    = var.zone_name
   type    = "A"
-  ttl     = 60
-  records = [aws_instance.webapp.public_ip]
+  alias {
+    name                   = aws_lb.load_balancer.dns_name
+    zone_id                = aws_lb.load_balancer.zone_id
+    evaluate_target_health = true
+  }
 }
 
+/*
 resource "aws_instance" "webapp" {
   instance_type               = "t2.micro"
   ami                         = data.aws_ami.app_ami.id
@@ -307,25 +439,5 @@ resource "aws_instance" "webapp" {
     volume_size = 50
     volume_type = "gp2"
   }
-  tags = {
-    Name = "MyVPCinstance"
-  }
-
-  user_data = <<EOF
-    #!/bin/bash
-    echo "DATABASE_HOST=${replace(aws_db_instance.RDS.endpoint, "/:.*/", "")}" >> /home/ec2-user/.env 
-    echo "DATABASE_NAME=${aws_db_instance.RDS.db_name}" >> /home/ec2-user/.env 
-    echo "DATABASE_USERNAME=${aws_db_instance.RDS.username}" >> /home/ec2-user/.env 
-    echo "DATABASE_PASSWORD=${aws_db_instance.RDS.password}" >> /home/ec2-user/.env 
-    echo "DIALECT=${aws_db_instance.RDS.engine}" >> /home/ec2-user/.env 
-    echo "BUCKET_NAME=${module.s3_bucket.mybucket.bucket}" >> /home/ec2-user/.env 
-    echo "BUCKET_REGION=${var.region}" >> /home/ec2-user/.env
-    mv /home/ec2-user/.env /home/ec2-user/webapp/.env 
-    mv /tmp/cloudwatch-config.json /opt/cloudwatch-config.json
-    sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-    -a fetch-config \
-    -m ec2 \
-    -c file:/opt/cloudwatch-config.json \
-    -s
-    EOF
 }
+*/
