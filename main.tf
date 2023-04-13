@@ -78,12 +78,6 @@ resource "aws_security_group" "lb_sg" {
   name        = "load balancer"
   description = "allow TCP traffic on ports 80, and 443 from anywhere in the world"
   vpc_id      = aws_vpc.main.id
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
 
   ingress {
     from_port   = 443
@@ -136,6 +130,14 @@ resource "aws_launch_template" "launch_conf" {
   user_data = base64encode(data.template_file.user_data.rendered)
   iam_instance_profile {
     name = aws_iam_instance_profile.attach-profile.name
+  }
+  block_device_mappings {
+    device_name = "/dev/xvda"
+    ebs {
+      kms_key_id = aws_kms_key.ebs.arn
+      encrypted  = true
+
+    }
   }
 }
 resource "aws_autoscaling_group" "asg_group" {
@@ -228,10 +230,14 @@ resource "aws_lb_target_group" "lb_tg" {
 
 }
 
+
+
 resource "aws_lb_listener" "lb_lis" {
   load_balancer_arn = aws_lb.load_balancer.arn
-  port              = "80"
-  protocol          = "HTTP"
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = "arn:aws:acm:us-east-1:525527600142:certificate/6753e816-94af-47f5-aab9-0f5e0ca3ed62"
 
   default_action {
     type             = "forward"
@@ -391,6 +397,8 @@ resource "aws_db_instance" "RDS" {
   parameter_group_name   = aws_db_parameter_group.RDSparameter.name
   apply_immediately      = true
   skip_final_snapshot    = true
+  kms_key_id             = aws_kms_key.rds.arn
+  storage_encrypted      = true
   tags = {
     Name = "RDS Instance"
   }
@@ -441,3 +449,93 @@ resource "aws_instance" "webapp" {
   }
 }
 */
+data "aws_caller_identity" "current" {
+}
+resource "aws_kms_key" "ebs" {
+  description              = "Encrypte EBS volumes"
+  policy = jsonencode({
+    "Id" : "key-consolepolicy-3",
+    "Version" : "2012-10-17",
+    "Statement" : [
+      {
+        "Sid" : "Enable IAM User Permissions",
+        "Effect" : "Allow",
+        "Principal" : {
+          "AWS" : "arn:aws:iam::525527600142:root"
+        },
+        "Action" : "kms:*",
+        "Resource" : "*"
+      },
+      {
+        "Sid" : "Allow access for Key Administrators",
+        "Effect" : "Allow",
+        "Principal" : {
+          "AWS" : [
+            "arn:aws:iam::525527600142:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing",
+            "arn:aws:iam::525527600142:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+          ]
+        },
+        "Action" : [
+          "kms:Create*",
+          "kms:Describe*",
+          "kms:Enable*",
+          "kms:List*",
+          "kms:Put*",
+          "kms:Update*",
+          "kms:Revoke*",
+          "kms:Disable*",
+          "kms:Get*",
+          "kms:Delete*",
+          "kms:TagResource",
+          "kms:UntagResource",
+          "kms:ScheduleKeyDeletion",
+          "kms:CancelKeyDeletion"
+        ],
+        "Resource" : "*"
+      },
+      {
+        "Sid" : "Allow use of the key",
+        "Effect" : "Allow",
+        "Principal" : {
+          "AWS" : [
+            "arn:aws:iam::525527600142:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
+            "arn:aws:iam::525527600142:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing"
+          ]
+        },
+        "Action" : [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey"
+        ],
+        "Resource" : "*"
+      },
+      {
+        "Sid" : "Allow attachment of persistent resources",
+        "Effect" : "Allow",
+        "Principal" : {
+          "AWS" : [
+            "arn:aws:iam::525527600142:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
+            "arn:aws:iam::525527600142:role/aws-service-role/elasticloadbalancing.amazonaws.com/AWSServiceRoleForElasticLoadBalancing"
+          ]
+        },
+        "Action" : [
+          "kms:CreateGrant",
+          "kms:ListGrants",
+          "kms:RevokeGrant"
+        ],
+        "Resource" : "*",
+        "Condition" : {
+          "Bool" : {
+            "kms:GrantIsForAWSResource" : "true"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_kms_key" "rds" {
+  description = "Encrypte RDS Instances"
+}

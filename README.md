@@ -33,3 +33,6 @@ terraform validate
 
 //plan and apply
 terraform plan -var-file="var.tfvars" && terraform plan -var-file="var.tfvars"
+
+//Command to Import SSL Certificate:
+aws --profile demo acm import-certificate --certificate fileb://demo_howardzh_me.crt --certificate-chain fileb://demo_howardzh_me.ca-bundle --private-key fileb://deproduct.key
