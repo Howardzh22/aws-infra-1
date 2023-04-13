@@ -452,7 +452,7 @@ resource "aws_instance" "webapp" {
 data "aws_caller_identity" "current" {
 }
 resource "aws_kms_key" "ebs" {
-  description              = "Encrypte EBS volumes"
+  description = "Encrypte EBS volumes"
   policy = jsonencode({
     "Id" : "key-consolepolicy-3",
     "Version" : "2012-10-17",
