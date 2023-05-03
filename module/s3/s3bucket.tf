@@ -2,11 +2,12 @@ resource "aws_s3_bucket" "bkt" {
     bucket_prefix = "s3bkt-" 
     force_destroy = true
 }
-
+/*
 resource "aws_s3_bucket_acl" "bucket_acl" {
   bucket = aws_s3_bucket.bkt.id
   acl    = "private"
 }
+*/
 
 resource "aws_s3_bucket_lifecycle_configuration" "bucket-config" {
 
