@@ -33,6 +33,12 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "example" {
   }
 }
 
-output "mybucket" {
-  value = aws_s3_bucket.bkt
+resource "aws_s3_bucket_public_access_block" "block" {
+  bucket = aws_s3_bucket.bkt.id
+
+
+  block_public_acls       = true
+  ignore_public_acls      = true
+  block_public_policy     = true
+  restrict_public_buckets = true
 }
