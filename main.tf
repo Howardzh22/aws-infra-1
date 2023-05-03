@@ -1,99 +1,20 @@
-/*
-module "mynetwork" {
 
-  source = "./module/networking"
-  cidr   = "10.0.0.0/16"
-}
-*/
 
 module "s3_bucket" {
-  source      = "./s3"
+  source      = "./module/s3"
   bucket_name = var.bucket_name
   acl_value   = var.acl_value
 }
 
-resource "aws_s3_bucket_public_access_block" "block" {
-  bucket = module.s3_bucket.mybucket.id
-
-  block_public_acls       = true
-  ignore_public_acls      = true
-  block_public_policy     = true
-  restrict_public_buckets = true
+module "VPC" {
+  source = "./module/vpc"
+  cidr   = var.cidr
+}
+module "security_groups" {
+  source = "./module/security-group"
+  vpc_id = module.VPC.vpc_id
 }
 
-resource "aws_vpc" "main" {
-  cidr_block = var.cidr
-  tags = {
-    Name = "MyVPC"
-  }
-
-}
-
-resource "aws_security_group" "app_sg" {
-  name        = "application"
-  description = "allow on port 22,80,443,8080"
-  vpc_id      = aws_vpc.main.id
-  ingress {
-    from_port       = 22
-    to_port         = 22
-    protocol        = "tcp"
-    security_groups = [aws_security_group.lb_sg.id]
-  }
-  ingress {
-    from_port       = 8080
-    to_port         = 8080
-    protocol        = "tcp"
-    security_groups = [aws_security_group.lb_sg.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-}
-
-resource "aws_security_group" "db_sg" {
-  name        = "database"
-  description = "allow on port 3306, and restrict access to the instance from the internet"
-  vpc_id      = aws_vpc.main.id
-  ingress {
-    from_port       = 3306
-    to_port         = 3306
-    protocol        = "tcp"
-    security_groups = [aws_security_group.app_sg.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-resource "aws_security_group" "lb_sg" {
-  name        = "load balancer"
-  description = "allow TCP traffic on ports 80, and 443 from anywhere in the world"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
 data "template_file" "user_data" {
 
   template = <<EOF
@@ -124,7 +45,7 @@ resource "aws_launch_template" "launch_conf" {
   key_name      = data.aws_key_pair.ec2_key.key_name
   network_interfaces {
     associate_public_ip_address = true
-    security_groups             = [aws_security_group.app_sg.id]
+    security_groups             = [module.security_groups.app_sg.id]
     //subnet_id                   = aws_subnet.public_subnets[0].id
   }
   user_data = base64encode(data.template_file.user_data.rendered)
@@ -208,7 +129,7 @@ resource "aws_lb" "load_balancer" {
   name               = "csye6225-lb"
   internal           = false
   load_balancer_type = "application"
-  security_groups    = [aws_security_group.lb_sg.id]
+  security_groups    = [module.security_groups.lb_sg.id]
   subnets            = aws_subnet.public_subnets.*.id
   tags = {
     Application = "WebApp"
@@ -220,7 +141,7 @@ resource "aws_lb_target_group" "lb_tg" {
   target_type = "instance"
   port        = 8080
   protocol    = "HTTP"
-  vpc_id      = aws_vpc.main.id
+  vpc_id      = module.VPC.vpc_id
 
   health_check {
     port     = 8080
@@ -247,7 +168,7 @@ resource "aws_lb_listener" "lb_lis" {
 
 resource "aws_subnet" "public_subnets" {
   count             = 3
-  vpc_id            = aws_vpc.main.id
+  vpc_id            = module.VPC.vpc_id
   cidr_block        = cidrsubnet(var.cidr, 8, count.index)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
@@ -257,7 +178,7 @@ resource "aws_subnet" "public_subnets" {
 
 resource "aws_subnet" "private_subnets" {
   count             = 3
-  vpc_id            = aws_vpc.main.id
+  vpc_id            = module.VPC.vpc_id
   cidr_block        = cidrsubnet(var.cidr, 8, count.index + 4)
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
@@ -266,7 +187,7 @@ resource "aws_subnet" "private_subnets" {
 }
 
 resource "aws_internet_gateway" "gw" {
-  vpc_id = aws_vpc.main.id
+  vpc_id = module.VPC.vpc_id
 
   tags = {
     Name = "main VPC IG"
@@ -274,8 +195,7 @@ resource "aws_internet_gateway" "gw" {
 }
 
 resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
-
+  vpc_id = module.VPC.vpc_id
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.gw.id
@@ -287,7 +207,7 @@ resource "aws_route_table" "public" {
 }
 
 resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.main.id
+  vpc_id = module.VPC.vpc_id
 
   route = []
 
@@ -393,7 +313,7 @@ resource "aws_db_instance" "RDS" {
   publicly_accessible    = false
   multi_az               = false
   db_subnet_group_name   = aws_db_subnet_group.db_subnet.name
-  vpc_security_group_ids = [aws_security_group.db_sg.id]
+  vpc_security_group_ids = [module.security_groups.db_sg.id]
   parameter_group_name   = aws_db_parameter_group.RDSparameter.name
   apply_immediately      = true
   skip_final_snapshot    = true
@@ -432,23 +352,6 @@ resource "aws_route53_record" "myrecord" {
   }
 }
 
-/*
-resource "aws_instance" "webapp" {
-  instance_type               = "t2.micro"
-  ami                         = data.aws_ami.app_ami.id
-  vpc_security_group_ids      = [aws_security_group.application.id]
-  subnet_id                   = aws_subnet.public_subnets[0].id
-  associate_public_ip_address = true
-  key_name                    = data.aws_key_pair.ec2_key.key_name
-  disable_api_termination     = false
-
-  iam_instance_profile = aws_iam_instance_profile.attach-profile.name
-  root_block_device {
-    volume_size = 50
-    volume_type = "gp2"
-  }
-}
-*/
 data "aws_caller_identity" "current" {
 }
 resource "aws_kms_key" "ebs" {
